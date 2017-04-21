@@ -1,0 +1,15 @@
+*.o
+*.obj
+*.exe
+*.las
+*.out
+
+.gdb*
+.vscode/
+bin/
+data/
+lib/
+extern/
+test/
+rust/
+python/
