@@ -29,4 +29,4 @@ the header. Otherwise include only the header:
  - Writing LAS files - maybe separate library?
  - VLR and EVLR support.
  - Endianess.
- - Additional more granuler interface.
+ - ~Additional more granuler interface.~

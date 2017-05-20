@@ -10,8 +10,8 @@
 #define LASER_H
 
 #define LASER_VERSION_MAJOR 0
-#define LASER_VERSION_MINOR 4
-#define LASER_VERSION_PATCH 1
+#define LASER_VERSION_MINOR 6
+#define LASER_VERSION_PATCH 0
 
 #if defined(__cplusplus)
 extern "C" {
@@ -44,6 +44,17 @@ typedef unsigned __int64 uint64_t;
 #else
 #define LASER_API extern
 #endif
+
+#if defined(__GNUC__)
+#define LASER_DEPRECATED __attribute__((deprecated))
+#elif defined(_WIN32)
+#define LASER_DEPRECATED __declspec(deprecated)
+#else
+#define LASER_DEPRECATED
+#endif
+
+#define LASER_DEFAULT_STRIDE ((uint64_t) 0)
+#define LASER_ALL_POINTS ((uint64_t) 0)
 
 typedef enum laserError {
     LASER_ERROR_NONE = 0,
@@ -85,7 +96,7 @@ typedef enum laserClassification {
     LASER_CLASSIFICATION_RESERVED_17,
     LASER_CLASSIFICATION_RESERVED_18,
     LASER_CLASSIFICATION_RESERVED_19,
-    LASER_CLASSIFICATION_RESERVED_20,
+    LASER_CLASSIFICATION_RESERVED_20
 } laserClassification;
 
 typedef struct laserInfo {
@@ -152,7 +163,7 @@ typedef enum laserAttribType {
     LASER_ATTRIB_TYPE_Y,
     LASER_ATTRIB_TYPE_Z,
     LASER_ATTRIB_TYPE_INTENSITY,
-    LASER_ATTRIB_TYPE_FLAG,
+    LASER_ATTRIB_TYPE_FLAGS,
     LASER_ATTRIB_TYPE_CLASSIFICATION,
     LASER_ATTRIB_TYPE_SCAN_ANGLE,
     LASER_ATTRIB_TYPE_USR,
@@ -171,7 +182,6 @@ typedef enum laserAttribType {
     LASER_ATTRIB_TYPE_COUNT
 } laserAttribType;
 
-#if 0
 typedef struct laserAttrib {
     laserAttribType type;
     uint64_t offset;
@@ -179,10 +189,8 @@ typedef struct laserAttrib {
 
 #define LASER_ATTRIB_END { LASER_ATTRIB_TYPE_NONE, 0 }
 
-LASER_API laserError laser_read_attribs_from_mem(void* points, uint64_t stride, laserAttrib* attribs, void* mem, uint64_t size);
-
-LASER_API laserError laser_read_attribs_from_io(void* points, uint64_t stride, laserAttrib* attribs, laserIo* io, void* usr);
-#endif
+LASER_API laserError laser_read_range_from_mem_with_attribs(void* points, uint64_t stride, laserAttrib* attribs, void* mem, uint64_t size, uint64_t first, uint64_t count);
+LASER_API laserError laser_read_range_from_io_with_attribs(void* points, uint64_t stride, laserAttrib* attribs, laserIo* io, void* usr, uint64_t first, uint64_t count);
 
 #if defined(__cplusplus)
 }
@@ -206,6 +214,10 @@ LASER_API laserError laser_read_attribs_from_io(void* points, uint64_t stride, l
 #if !defined(LASER_MEMSET)
 #include <string.h>
 #define LASER_MEMSET(s, c, sz) memset((s), (c), (sz))
+#endif
+
+#if !defined(LASER_OFFSET_OF)
+#define LASER_OFFSET_OF(s, m) ((uint64_t) (&(((s*) 0)->m)))
 #endif
 
 static const uint8_t LASER_MAGIC[4] = { 'L', 'A', 'S', 'F' };
@@ -472,6 +484,19 @@ static const uint32_t _LASER_VALID_ATTRIB_TABLE[6] = {
     0x1FF, 0x3FF, 0x1DFF, 0x1FFF, 0xFE3FF, 0xFFFFF,
 };
 
+static laserAttrib _LASER_DEFAULT_ATTRIBS[] = {
+    { LASER_ATTRIB_TYPE_X, LASER_OFFSET_OF(laserPoint, x) },
+    { LASER_ATTRIB_TYPE_Y, LASER_OFFSET_OF(laserPoint, y) },
+    { LASER_ATTRIB_TYPE_Z, LASER_OFFSET_OF(laserPoint, z) },
+    { LASER_ATTRIB_TYPE_INTENSITY, LASER_OFFSET_OF(laserPoint, intensity) },
+    { LASER_ATTRIB_TYPE_FLAGS, LASER_OFFSET_OF(laserPoint, flags) },
+    { LASER_ATTRIB_TYPE_CLASSIFICATION, LASER_OFFSET_OF(laserPoint, classification) },
+    { LASER_ATTRIB_TYPE_SCAN_ANGLE, LASER_OFFSET_OF(laserPoint, scan_angle) },
+    { LASER_ATTRIB_TYPE_USR, LASER_OFFSET_OF(laserPoint, usr) },
+    { LASER_ATTRIB_TYPE_POINT_ID, LASER_OFFSET_OF(laserPoint, point_id) },
+    LASER_ATTRIB_END
+};
+
 static laserError _laser_check_magic(uint8_t* magic) {
     laserError res = LASER_ERROR_NONE;
     if(magic[0] != LASER_MAGIC[0] || magic[1] != LASER_MAGIC[1] ||
@@ -516,68 +541,12 @@ laserError laser_info_from_mem(laserInfo* info, void* mem, uint64_t size) {
     return res;
 }
 
-#define LASER_ALL_POINTS ((uint64_t) 0)
-
-static laserError _laser_read_from_mem(laserPoint* points, uint64_t stride, laserInfo* info, void* raw_points, uint64_t size, uint64_t first, uint64_t count) {
-    (void) size;
-
-    laserError res = LASER_ERROR_NONE;
-    if((first + count) > info->point_count) {
-        res = LASER_ERROR_INVALID_RANGE;
-    } else {
-        stride = stride == 0 ? sizeof(laserPoint): stride;
-        uint8_t* raw_point = ((uint8_t*) raw_points) + (first * info->point_size);
-        laserPoint* point = points;
-        uint64_t point_size = info->point_size;
-        uint32_t point_format = info->point_format;
-        float scale_x = info->scale_x;
-        float scale_y = info->scale_y;
-        float scale_z = info->scale_z;
-        float offset_x = info->offset_x;
-        float offset_y = info->offset_y;
-        float offset_z = info->offset_z;
-        for(uint64_t i = 0; i < count; i++) {
-            point->x = ((float) *((int32_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_X])) * scale_x + offset_x);
-            point->y = ((float) *((int32_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_Y])) * scale_y + offset_y);
-            point->z = ((float) *((int32_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_Z])) * scale_z + offset_z);
-
-            point->intensity = *((uint16_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_INTENSITY]));
-
-            uint8_t flags = *((uint8_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_FLAG]));
-            point->flags.return_number = flags & 0x07;
-            point->flags.return_count = (flags >> 0x03) & 0x07;
-            point->flags.scan_direction = (flags >> 0x06) & 0x01;
-            point->flags.edge = (flags >> 0x07) & 0x01;
-
-            uint8_t classification = *((uint8_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_CLASSIFICATION]));
-            point->classification.type = classification & 0x07;
-            point->classification.synthetic = (classification >> 0x05) & 0x01;
-            point->classification.keypoint = (classification >> 0x06) & 0x01;
-            point->classification.withheld = (classification >> 0x07) & 0x01;
-
-            point->scan_angle = *((int8_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_SCAN_ANGLE]));
-            point->usr = *((uint8_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_USR]));
-            point->point_id = *((uint16_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_POINT_ID]));
-
-            point = (laserPoint*) (((uint8_t*) point) + stride);
-            raw_point += point_size;
-        }
-    }
-    return res;
-}
-
 laserError laser_read_from_mem(laserPoint* points, uint64_t stride, void* mem, uint64_t size) {
     return laser_read_range_from_mem(points, stride, mem, size, 0, LASER_ALL_POINTS);
 }
 
 laserError laser_read_range_from_mem(laserPoint* points, uint64_t stride, void* mem, uint64_t size, uint64_t first, uint64_t count) {
-    laserInfo info;
-    laserError res = laser_info_from_mem(&info, mem, size);
-    if(res == LASER_ERROR_NONE) {
-        count = count == LASER_ALL_POINTS ? info.point_count: count;
-        res = _laser_read_from_mem(points, stride, &info, ((uint8_t*) mem) + info.point_offset, size, first, count);
-    }
-    return res;
+    return laser_read_range_from_mem_with_attribs(points, !stride ? sizeof(laserPoint): stride, _LASER_DEFAULT_ATTRIBS, mem, size, first, count);
 }
 
 laserError laser_info_from_io(laserInfo* info, laserIo* io, void* usr) {
@@ -597,9 +566,117 @@ laserError laser_read_from_io(laserPoint* points, uint64_t stride, laserIo* io, 
 }
 
 laserError laser_read_range_from_io(laserPoint* points, uint64_t stride, laserIo* io, void* usr, uint64_t first, uint64_t count) {
+    return laser_read_range_from_io_with_attribs(points, !stride ? sizeof(laserPoint): stride, _LASER_DEFAULT_ATTRIBS, io, usr, first, count);
+}
+
+enum {
+    LASER_ATTRIB_FLAG_X = (1 << 0),
+    LASER_ATTRIB_FLAG_Y = (1 << 1),
+    LASER_ATTRIB_FLAG_Z = (1 << 2),
+    LASER_ATTRIB_FLAG_INTENSITY = (1 << 3),
+    LASER_ATTRIB_FLAG_FLAGS = (1 << 4),
+    LASER_ATTRIB_FLAG_CLASSIFICATION = (1 << 5),
+    LASER_ATTRIB_FLAG_SCAN_ANGLE = (1 << 6),
+    LASER_ATTRIB_FLAG_USR = (1 << 7),
+    LASER_ATTRIB_FLAG_POINT_ID = (1 << 8),
+    LASER_ATTRIB_FLAG_GPS_TIME = (1 << 9),
+    LASER_ATTRIB_FLAG_RED = (1 << 10),
+    LASER_ATTRIB_FLAG_GREEN = (1 << 11),
+    LASER_ATTRIB_FLAG_BLUE = (1 << 12),
+    LASER_ATTRIB_FLAG_WAVEFORM_ID = (1 << 13),
+    LASER_ATTRIB_FLAG_WAVEFORM_OFFSET = (1 << 14),
+    LASER_ATTRIB_FLAG_WAVEFORM_SIZE = (1 << 15),
+    LASER_ATTRIB_FLAG_WAVEFORM_LOCATION = (1 << 16),
+    LASER_ATTRIB_FLAG_X_TIME = (1 << 17),
+    LASER_ATTRIB_FLAG_Y_TIME = (1 << 18),
+    LASER_ATTRIB_FLAG_Z_TIME = (1 << 19)
+};
+
+static laserError _laser_read_attribs_from_mem(void* points, uint64_t stride, uint32_t flags, uint64_t* offsets, laserInfo* info, void* raw_points, uint64_t size, uint64_t first, uint64_t count) {
+    (void) size;
+
+    laserError res = LASER_ERROR_NONE;
+    count = count == LASER_ALL_POINTS ? info->point_count: count;
+    if((first + count) > info->point_count) {
+        res = LASER_ERROR_INVALID_RANGE;
+    } else {
+        uint8_t* raw_point = ((uint8_t*) raw_points) + (first * info->point_size);
+        uint8_t* point = (uint8_t*) points;
+        uint64_t point_size = info->point_size;
+        uint32_t point_format = info->point_format;
+        float scale_x = info->scale_x;
+        float scale_y = info->scale_y;
+        float scale_z = info->scale_z;
+        float offset_x = info->offset_x;
+        float offset_y = info->offset_y;
+        float offset_z = info->offset_z;
+        for(uint64_t i = 0; i < count; i++) {
+            if(flags & LASER_ATTRIB_FLAG_X) {
+                *((float*) (point + offsets[LASER_ATTRIB_TYPE_X])) = *((int32_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_X])) * scale_x + offset_x;
+            }
+            if(flags & LASER_ATTRIB_FLAG_Y) {
+                *((float*) (point + offsets[LASER_ATTRIB_TYPE_Y])) = *((int32_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_Y])) * scale_y + offset_y;
+            }
+            if(flags & LASER_ATTRIB_FLAG_Z) {
+                *((float*) (point + offsets[LASER_ATTRIB_TYPE_Z])) = *((int32_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_Z])) * scale_z + offset_z;
+            }
+            if(flags & LASER_ATTRIB_FLAG_INTENSITY) {
+                *((uint16_t*) (point + offsets[LASER_ATTRIB_TYPE_INTENSITY])) = *((uint16_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_INTENSITY]));
+            }
+            if(flags & LASER_ATTRIB_FLAG_FLAGS) {
+                *((uint8_t*) (point + offsets[LASER_ATTRIB_TYPE_FLAGS])) = *((uint8_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_FLAGS]));
+            }
+            if(flags & LASER_ATTRIB_FLAG_CLASSIFICATION) {
+                *((uint8_t*) (point + offsets[LASER_ATTRIB_TYPE_CLASSIFICATION])) = *((uint8_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_CLASSIFICATION]));
+            }
+            if(flags & LASER_ATTRIB_FLAG_SCAN_ANGLE) {
+                *((int8_t*) (point + offsets[LASER_ATTRIB_TYPE_SCAN_ANGLE])) = *((int8_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_SCAN_ANGLE]));
+            }
+            if(flags & LASER_ATTRIB_FLAG_USR) {
+                *((uint8_t*) (point + offsets[LASER_ATTRIB_TYPE_USR])) = *((uint8_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_USR]));
+            }
+            if(flags & LASER_ATTRIB_FLAG_POINT_ID) {
+                *((uint16_t*) (point + offsets[LASER_ATTRIB_TYPE_POINT_ID])) = *((uint16_t*) (raw_point + _LASER_ATTRIB_OFFSET_TABLE[point_format][LASER_ATTRIB_TYPE_POINT_ID]));
+            }
+            point = point + stride;
+            raw_point += point_size;
+        }
+    }
+    return res;
+}
+
+laserError laser_read_range_from_mem_with_attribs(void* points, uint64_t stride, laserAttrib* attribs, void* mem, uint64_t size, uint64_t first, uint64_t count) {
+    laserInfo info;
+    laserError res = laser_info_from_mem(&info, mem, size);
+    if(res == LASER_ERROR_NONE) {
+        uint64_t offsets[LASER_ATTRIB_TYPE_COUNT];
+        uint32_t flags = 0;
+        for(uint64_t i = 0; i < LASER_ATTRIB_TYPE_COUNT; i++) {
+            if(attribs[i].type == LASER_ATTRIB_TYPE_NONE) {
+                break;
+            }
+            offsets[attribs[i].type] = attribs[i].offset;
+            flags |= 1 << attribs[i].type;
+        }
+        res = _laser_read_attribs_from_mem(points, stride, flags, offsets, &info, ((uint8_t*) mem) + info.point_offset, size, first, count);
+    }
+    return res;
+}
+
+laserError laser_read_range_from_io_with_attribs(void* points, uint64_t stride, laserAttrib* attribs, laserIo* io, void* usr, uint64_t first, uint64_t count) {
     laserInfo info;
     laserError res = laser_info_from_io(&info, io, usr);
     if(res == LASER_ERROR_NONE) {
+        uint64_t offsets[LASER_ATTRIB_TYPE_COUNT];
+        uint32_t flags = 0;
+        for(uint64_t i = 0; i < LASER_ATTRIB_TYPE_COUNT; i++) {
+            if(attribs[i].type == LASER_ATTRIB_TYPE_NONE) {
+                break;
+            }
+            offsets[attribs[i].type] = attribs[i].offset;
+            flags |= 1 << attribs[i].type;
+        }
+
         uint8_t point_buffer[16384 * 4];
         LASER_MEMSET(point_buffer, 0, sizeof(point_buffer));
 
@@ -608,14 +685,14 @@ laserError laser_read_range_from_io(laserPoint* points, uint64_t stride, laserIo
         uint64_t point_count = count > max_point_count ? max_point_count: count;
 
         uint64_t read_count = count / max_point_count;
-        read_count = read_count == 0 ? 1: read_count;
+        read_count = !read_count ? 1: read_count;
 
         uint64_t expected = info.point_size * point_count;
         for(uint64_t i = 0; i < read_count; i++) {
             uint64_t offset = info.point_offset + ((i + first) * info.point_size * point_count);
             uint32_t read = io->read(usr, (void*) point_buffer, expected, offset);
             if(read == expected) {
-                res = _laser_read_from_mem(points + (i * point_count), stride, &info, (void*) point_buffer, read, 0, point_count);
+                res = _laser_read_attribs_from_mem(((uint8_t*) points) + (i * point_count), stride, flags, offsets, &info, (void*) point_buffer, read, 0, point_count);
                 if(res != LASER_ERROR_NONE) {
                     break;
                 }
@@ -635,6 +712,7 @@ const char* laser_error_str(laserError err) {
         case LASER_ERROR_INVALID_RANGE: return "Invalid point range";
         case LASER_ERROR_VERSION_UNSUPPORTED: return "Unsupported version, supported versions: 1.0, 1.1, 1.2 and 1.3";
         case LASER_ERROR_FORMAT_UNSUPPORTED: return "Unknown point format, known formats: 0, 1, 2, 3, 4 and 5";
+        case LASER_ERROR_IO_READ: return "Truncated read";
         default: return "Unknown error";
     }
 }
