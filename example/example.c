@@ -4,7 +4,7 @@
 #define LASER_IMPL
 #include "../laser.h"
 
-#if defined(_MSC_VER)
+#if defined(_WIN32)
 #include <windows.h>
 #else
 #include <sys/stat.h>
@@ -14,7 +14,9 @@ typedef struct v3 {
     float x, y, z;
 } v3;
 
-uint32_t las_read(void* usr, void* data, uint32_t size, uint64_t offset) {
+uint64_t las_read(void* usr, void* data, uint64_t size, uint64_t offset);
+
+uint64_t las_read(void* usr, void* data, uint64_t size, uint64_t offset) {
     FILE* f = (FILE*) usr;
     fseek(f, offset, SEEK_SET);
     return fread(data, 1, size, f);
@@ -22,18 +24,27 @@ uint32_t las_read(void* usr, void* data, uint32_t size, uint64_t offset) {
 
 int main(int argc, const char** argv) {
     if(argc > 1) {
+        unsigned long file_size = 0;
+#if defined(_WIN32)
+        HANDLE h = CreateFileA(argv[1], GENERIC_READ, 0, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+        DWORD s = 0;
+        GetFileSize(h, &s);
+        file_size = s;
+#else
         struct stat s;
         stat(argv[1], &s);
+        file_size = s.st_size;
+#endif
 
         FILE* file = fopen(argv[1], "rb");
 
-        void* las_data = malloc(s.st_size);
-        fread(las_data, 1, s.st_size, file);
+        void* las_data = malloc(file_size);
+        fread(las_data, 1, file_size, file);
         laserInfo info;
-        laser_info_from_mem(&info, las_data, s.st_size);
+        laser_info_from_mem(&info, las_data, file_size);
 
         laserPoint* points = (laserPoint*) calloc(info.point_count, sizeof(laserPoint));
-        laser_read_from_mem(points, 0, las_data, s.st_size);
+        laser_read_from_mem(points, 0, las_data, file_size);
 
         laserAttrib attribs[] = {
             { LASER_ATTRIB_TYPE_X, 0 },
@@ -43,11 +54,9 @@ int main(int argc, const char** argv) {
         };
 
         v3* xyz = (v3*) calloc(info.point_count, sizeof(laserPoint));
-        laser_read_range_from_mem_with_attribs(xyz, sizeof(v3), attribs, las_data, s.st_size, 0, LASER_ALL_POINTS);
+        laser_read_range_from_mem_with_attribs(xyz, sizeof(v3), attribs, las_data, file_size, 0, LASER_ALL_POINTS);
 
-        laserIo io;
-        io.read = las_read;
-        laser_read_from_io(points, 0, &io, (void*) file);
+        laser_read_from_io(points, 0, &las_read, (void*) file);
 
         for(uint32_t i = 0; i < 1000; i++) {
             printf("%d %.2f %.2f %.2f\n",
@@ -59,5 +68,8 @@ int main(int argc, const char** argv) {
         free(las_data);
         free(points);
         fclose(file);
+        return 0;
     }
+    printf("%s FILE\n", argv[0]);
+    return -1;
 }
